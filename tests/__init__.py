@@ -1,0 +1,3 @@
+"""
+FreightLedger AI — Tests package.
+"""
