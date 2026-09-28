@@ -1,10 +1,20 @@
 """
-FreightLedger AI — Streamlit UI.
+FreightLedger AI — Streamlit UI (Direct Agent Version for Cloud Deploy)
 """
 import streamlit as st
-import requests
+import os
+import json
+from dotenv import load_dotenv
 
-API_URL = "http://127.0.0.1:8000"
+# Load environment variables (for local testing)
+load_dotenv()
+
+# Import the agent directly
+from agent import extract_invoice_data
+from database import init_db, save_invoice, list_invoices
+
+# Initialize database
+init_db()
 
 st.set_page_config(
     page_title="FreightLedger AI",
@@ -18,9 +28,7 @@ st.markdown("### AI-powered freight invoice extraction — built with $0 investm
 tab1, tab2 = st.tabs(["📤 Extract Invoice", "📋 History"])
 
 with tab1:
-    st.markdown(
-        "Upload a freight invoice PDF. The AI will extract all key fields automatically."
-    )
+    st.markdown("Upload a freight invoice PDF. The AI will extract all key fields automatically.")
     uploaded_file = st.file_uploader("Choose a PDF invoice", type=["pdf"])
 
     if uploaded_file is not None:
@@ -36,47 +44,27 @@ with tab1:
             if st.button("🚀 Extract Data", type="primary", use_container_width=True):
                 with st.spinner("AI is reading your invoice..."):
                     try:
-                        files = {
-                            "file": (
-                                uploaded_file.name,
-                                uploaded_file.getvalue(),
-                                "application/pdf",
-                            )
-                        }
-                        response = requests.post(
-                            f"{API_URL}/extract", files=files, timeout=180
-                        )
+                        # Save uploaded file temporarily
+                        temp_path = os.path.join("invoices", uploaded_file.name)
+                        os.makedirs("invoices", exist_ok=True)
+                        with open(temp_path, "wb") as f:
+                            f.write(uploaded_file.getvalue())
 
-                        if response.status_code == 200:
-                            data = response.json()
+                        # Run agent directly
+                        result = extract_invoice_data(temp_path)
 
-                            if data.get("status") == "success":
-                                st.success(
-                                    f"✅ Extraction successful! "
-                                    f"Record ID: {data.get('record_id', 'N/A')}"
-                                )
-                                st.json(data["invoice"])
-                            elif data.get("status") == "partial":
-                                st.warning("⚠️ Partial extraction. Raw output below:")
-                                st.code(
-                                    data.get("raw_output", data.get("error", "")),
-                                    language="json",
-                                )
-                            else:
-                                st.error(
-                                    f"❌ Error: {data.get('error', 'Unknown error')}"
-                                )
-                                if data.get("raw_output"):
-                                    st.code(data["raw_output"])
+                        if result.get("status") == "success":
+                            # Save to database
+                            record_id = save_invoice(result)
+                            st.success(f"✅ Extraction successful! Record ID: {record_id}")
+                            st.json(result)
+                        elif result.get("status") == "partial":
+                            st.warning("⚠️ Partial extraction. Raw output below:")
+                            st.code(result.get("raw_output", result.get("error", "")), language="json")
                         else:
-                            st.error(f"HTTP {response.status_code}: {response.text}")
-
-                    except requests.exceptions.ConnectionError:
-                        st.error(
-                            "❌ Cannot connect to the backend.\n\n"
-                            "Make sure the FastAPI server is running:\n"
-                            "```\nuvicorn main:app --reload\n```"
-                        )
+                            st.error(f"❌ Error: {result.get('error', 'Unknown error')}")
+                            if result.get("raw_output"):
+                                st.code(result["raw_output"])
                     except Exception as e:
                         st.error(f"Unexpected error: {e}")
 
@@ -87,17 +75,13 @@ with tab2:
         st.rerun()
 
     try:
-        response = requests.get(f"{API_URL}/invoices?limit=20", timeout=10)
-        if response.status_code == 200:
-            invoices = response.json().get("invoices", [])
-            if invoices:
-                st.dataframe(invoices, use_container_width=True)
-            else:
-                st.info("No invoices processed yet.")
+        invoices = list_invoices(limit=20)
+        if invoices:
+            st.dataframe(invoices, use_container_width=True)
         else:
-            st.error(f"Failed to load invoices: HTTP {response.status_code}")
-    except Exception:
-        st.info("Start the backend to see invoice history.")
+            st.info("No invoices processed yet.")
+    except Exception as e:
+        st.error(f"Failed to load invoices: {e}")
 
 st.markdown("---")
-st.caption("Built with free Groq API • LangChain • FastAPI • Streamlit")
+st.caption("Built with free Groq API • LangChain • Streamlit")
